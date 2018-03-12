@@ -1,71 +1,97 @@
 package main
 
 import (
-	"strings"
-	"io/ioutil"
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
-	"encoding/json"
+	"strconv"
+	"strings"
 )
 
 var (
-	port = "5678"
+	port  = "5678"
 	token string
 )
 
 type Field struct {
 	Title string `json:"title"`
 	Value string `json:"value"`
-	Short bool `json:"short"`
+	Short bool   `json:"short"`
 }
 
 type Action struct {
-	Name string `json:"name"`
-	Text string `json:"text"`
-	Type string `json:"type"`
+	Name  string `json:"name"`
+	Text  string `json:"text"`
+	Type  string `json:"type"`
 	Value string `json:"value"`
 	Style string `json:"style"`
 }
 
 type Attachment struct {
-	Fallback string `json:"fallback"`
-	CallbackID string `json:"callback_id"`
-	Color string `json:"color"`
-	AttachmentType string `json:"attachment_type"`
-	Fields []Field `json:"fields"`
-	Actions []Action `json:"actions"`
+	Fields         []Field  `json:"fields"`
+	Actions        []Action `json:"actions"`
+	Fallback       string   `json:"fallback"`
+	CallbackID     string   `json:"callback_id"`
+	Color          string   `json:"color"`
+	AttachmentType string   `json:"attachment_type"`
+	Title          string   `json:"title"`
 }
 
 type Response struct {
 	Attachments []Attachment `json:"attachments"`
-	Channel string `json:"channel"`
+	Channel     string       `json:"channel"`
+	TS          string       `json:"ts"`
+}
+
+type Team struct {
+	ID     string `json:"id"`
+	Domain string `json:"domain"`
+}
+
+type Channel struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type User struct {
+	Channel
 }
 
 type Request struct {
-	Token string
-	TeamID string
-	TeamDomain string
-	ChannelID string
-	ChannelName string
-	UserID string
-	UserName string
-	Command string
-	Text string
-	ResponseURL string
-	TriggerID string
+	Payload
 }
 
-func replyToSlack(r Response, w http.ResponseWriter) {
-	reqJSON, _ := json.Marshal(r)
-	
-	fmt.Println(string(reqJSON), "Sending to Slack")
+type UserAction []string
 
+type Payload struct {
+	Actions         []Action `json:"actions"`
+	Team            Team     `json:"team"`
+	Channel         Channel  `json:"channel"`
+	User            User     `json:"user"`
+	OriginalMessage Response `json:"original_message"`
+	Type            string   `json:"type"`
+	CallbackID      string   `json:"callback_id"`
+	ActionTS        string   `json:"action_ts"`
+	MessageTS       string   `json:"message_ts"`
+	AttachmentID    string   `json:"attachment_id"`
+	Token           string   `json:"token"`
+	ResponseURL     string   `json:"response_url"`
+	TriggerID       string   `json:"trigger_id"`
+	IsAppUnfurl     bool     `json:"is_app_unfurl"`
+}
+
+func replyToSlack(r Response, w http.ResponseWriter, endPointName string) {
+	reqJSON, _ := json.Marshal(r)
+
+	// fmt.Println(string(reqJSON), "Sending to Slack")
 
 	client := &http.Client{}
-	req, err := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", bytes.NewBuffer([]byte(reqJSON)))
+	req, err := http.NewRequest("POST", "https://slack.com/api/"+endPointName, bytes.NewBuffer([]byte(reqJSON)))
 
 	if err != nil {
 		fmt.Println(err)
@@ -73,7 +99,7 @@ func replyToSlack(r Response, w http.ResponseWriter) {
 	}
 
 	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Authorization", "Bearer " + token)
+	req.Header.Add("Authorization", "Bearer "+token)
 	resp, err := client.Do(req)
 
 	if err != nil {
@@ -82,13 +108,13 @@ func replyToSlack(r Response, w http.ResponseWriter) {
 		return
 	}
 
-	body, err := ioutil.ReadAll(resp.Body)
+	// body, err := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
-	fmt.Printf(string(body))
+	// fmt.Printf(string(body))
 }
 
 func leaveRequestHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
+	if r.Method != http.MethodPost {
 		http.Error(w, "Can use this one with this method", http.StatusBadGateway)
 		return
 	}
@@ -100,64 +126,171 @@ func leaveRequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	channel := r.FormValue("channel_id")
 	text := r.FormValue("text")
-	fmt.Println(text);
+	fmt.Println(text)
 
-	contents := strings.Split(text, " ")
-	name, date, reason := contents[0], contents[1], contents[2]
-	fmt.Println(contents);
+	var name, date, reason, leaveType string
+
+	if strings.Contains(text, "wf") {
+		contents := strings.Split(text, "\n")
+		submitter := contents[0]
+		leaveRequestType := contents[1]
+		duration := contents[2]
+		leaveRequestReason := contents[4]
+		name = strings.Split(submitter, ": ")[1]
+		leaveType = strings.Split(leaveRequestType, ":")[1]
+		date = strings.Split(duration, ": ")[1]
+		reason = strings.Split(leaveRequestReason, ": ")[2]
+	} else {
+		contents := strings.Split(text, " ")
+		name = "<" + contents[0] + ">"
+		date = contents[1]
+		reason = contents[2]
+		leaveType = contents[3]
+	}
 
 	fieds := []Field{
-		{"Submitter", "<" + name + ">", true},
+		{"Submitter", name, true},
 		{"Date", date, true},
 		{"Reason", reason, true},
+		{"Leave type", leaveType, true},
 	}
 
 	actions := []Action{
 		{
-			Name: "validation",
-			Text: "OK for me",
-			Type: "button",
+			Name:  "validation",
+			Text:  "Approve",
+			Type:  "button",
 			Value: "ok",
 			Style: "primary",
 		},
-		{
-			Name: "validation",
-			Text: "KO for me",
-			Type: "button",
-			Value: "ko",
-			Style: "danger",
-		},
+		// {
+		// 	Name:  "validation",
+		// 	Text:  "No",
+		// 	Type:  "button",
+		// 	Value: "ko",
+		// 	Style: "danger",
+		// },
 	}
 
 	response := Response{
 		Attachments: []Attachment{
 			{
-				Fallback: "You are unable to choose a validation type",
-				CallbackID: "wopr_game",
-				Color: "#3AA3E3",
+				Fallback:       "You are unable to choose a validation type",
+				CallbackID:     "lqid",
+				Color:          "#3AA3E3",
 				AttachmentType: "default",
-				Fields: fieds,
-				Actions: actions,
+				Fields:         fieds,
+				Actions:        actions,
 			},
 		},
 		Channel: channel,
 	}
 
-	replyToSlack(response, w)
+	replyToSlack(response, w, "chat.postMessage")
 }
 
 func messageActionHandler(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Error parsing form", http.StatusBadRequest)
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	buf, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read request body: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	jsonStr, err := url.QueryUnescape(string(buf)[8:])
+	if err != nil {
+		log.Printf("[ERROR] Failed to unescape request body: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var message Request
+	if err := json.Unmarshal([]byte(jsonStr), &message); err != nil {
+		log.Printf("[ERROR] Failed to decode json message from slack: %s", jsonStr)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	attachments := message.Payload.OriginalMessage.Attachments
+	newFields := attachments[0].Fields
+	var users []string
+	userFormatedWithTag := userToTagString(message.Payload.User.ID)
+
+	log.Println(newFields, len(newFields))
+	if len(newFields) == 4 {
+		// the user is not exits
+		users := append(users, userFormatedWithTag)
+		newFields = append(newFields, Field{strings.Join(users, ""), getHasOrHave(len(users)), " approved"}, ""), "", false})
+		attachments[0].Actions[0].Text = joinBtnText(len(users))
+
+		log.Println(attachments)
+	} else if len(newFields) > 4 {
+		for idx, user := range users {
+				//  check if the user is exist
+				if user == userFormatedWithTag {
+					users = append(users[:idx], users[idx+1:]...)
+				} else {
+					// check if the user is not exits
+					users = append(users, userFormatedWithTag)
+				}
+		}
+
+		log.Println(newFields)
+
+		// if the user is remove
+		if len(users) < 1 {
+			attachments[0].Actions[0].Text = "Approved"
+			newFields = newFields[:len(newFields) -1]
+		} else {
+			newFields = append(newFields, Field{
+				strings.Join([]string{strings.Join(users, ""), getHasOrHave(len(users)), " approved"}, ""), "", false})
+			attachments[0].Actions[0].Text = joinBtnText(len(users))
+		}
+	} else {
+		attachments[0].Actions[0].Text = "Approved"
+	}
+
+	newMessage := Response{
+		Channel:     message.Payload.Channel.ID,
+		Attachments: attachments,
+		TS:          message.Payload.OriginalMessage.TS,
+	}
+	log.Println(newMessage.Attachments)
+	replyToSlack(newMessage, w, "chat.update")
+}
+
+func userToTagString(u string) string {
+	return "<@" + u + "> "
+}
+
+func getAllUsersVoted(s string) []string {
+	users := strings.SplitAfter(s, ">")
+	return users[:len(users) -1]
+}
+
+func getHasOrHave(length int) string {
+	var hasOrHave = "has"
+		if length > 1 {
+			hasOrHave = "have"
+		}
+	return hasOrHave
+}
+
+func joinBtnText(length int) string {
+	return strings.Join([]string{"Approved ", "(", strconv.Itoa(length), ")"}, "")
 }
 
 func handleRequest() {
 	http.HandleFunc("/lq", leaveRequestHandler)
 	http.HandleFunc("/ma", messageActionHandler)
 	log.Printf("Server is starting at %s", port)
-	log.Fatal(http.ListenAndServe(":" + port, nil))
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
 func initial() {
