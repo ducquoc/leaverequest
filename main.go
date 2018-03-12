@@ -58,7 +58,7 @@ type Request struct {
 	TriggerID string
 }
 
-func ReplySlack(r Response, w http.ResponseWriter) {
+func replyToSlack(r Response, w http.ResponseWriter) {
 	reqJSON, _ := json.Marshal(r)
 	
 	fmt.Println(string(reqJSON), "Sending to Slack")
@@ -87,7 +87,7 @@ func ReplySlack(r Response, w http.ResponseWriter) {
 	fmt.Printf(string(body))
 }
 
-func LeaveRequestHandler(w http.ResponseWriter, r *http.Request) {
+func leaveRequestHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Can use this one with this method", http.StatusBadGateway)
 		return
@@ -143,16 +143,24 @@ func LeaveRequestHandler(w http.ResponseWriter, r *http.Request) {
 		Channel: channel,
 	}
 
-	ReplySlack(response, w)
+	replyToSlack(response, w)
 }
 
-func HandleRequest() {
-	http.HandleFunc("/lq", LeaveRequestHandler)
+func messageActionHandler(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Error parsing form", http.StatusBadRequest)
+		return
+	}
+}
+
+func handleRequest() {
+	http.HandleFunc("/lq", leaveRequestHandler)
+	http.HandleFunc("/ma", messageActionHandler)
 	log.Printf("Server is starting at %s", port)
 	log.Fatal(http.ListenAndServe(":" + port, nil))
 }
 
-func Init() {
+func initial() {
 	if "" == os.Getenv("TOKEN") {
 		panic("Token is not found")
 	}
@@ -165,6 +173,6 @@ func Init() {
 }
 
 func main() {
-	Init()
-	HandleRequest()
+	initial()
+	handleRequest()
 }
