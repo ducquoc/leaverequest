@@ -1,19 +1,20 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
-	"net/url"
-	"os"
 	"strconv"
 	"strings"
+	"net/url"
+	"bytes"
+	"fmt"
+	"log"
+	"os"
 )
 
 var (
+	slackAPI = "https://slack.com/api/"
 	port  = "5678"
 	token string
 )
@@ -66,8 +67,6 @@ type Request struct {
 	Payload
 }
 
-type UserAction []string
-
 type Payload struct {
 	Actions         []Action `json:"actions"`
 	Team            Team     `json:"team"`
@@ -91,7 +90,7 @@ func replyToSlack(r Response, w http.ResponseWriter, endPointName string) {
 	// fmt.Println(string(reqJSON), "Sending to Slack")
 
 	client := &http.Client{}
-	req, err := http.NewRequest("POST", "https://slack.com/api/"+endPointName, bytes.NewBuffer([]byte(reqJSON)))
+	req, err := http.NewRequest("POST", slackAPI+endPointName, bytes.NewBuffer([]byte(reqJSON)))
 
 	if err != nil {
 		fmt.Println(err)
@@ -150,8 +149,8 @@ func leaveRequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	fieds := []Field{
 		{"Submitter", name, true},
-		{"Date", date, true},
-		{"Reason", reason, true},
+		{"Duration", date, true},
+		{"Additional information", reason, true},
 		{"Leave type", leaveType, true},
 	}
 
@@ -162,13 +161,6 @@ func leaveRequestHandler(w http.ResponseWriter, r *http.Request) {
 			Type:  "button",
 			Value: "ok",
 			Style: "primary",
-		},
-		{
-			Name:  "validation",
-			Text:  "No",
-			Type:  "button",
-			Value: "ko",
-			Style: "danger",
 		},
 	}
 
@@ -217,85 +209,77 @@ func messageActionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userActions := UserAction{}
+	attachments := message.Payload.OriginalMessage.Attachments
+	var users []string
+	userFormatedWithTag := userToTagString(message.Payload.User.ID)
 
-	users := append(userActions, message.Payload.User.ID)
-	log.Println(users, "users")
-	userLength := len(users)
-	attLength := len(message.Payload.OriginalMessage.Attachments)
+	// log.Println(newFields, len(newFields))
+	if len(attachments[0].Fields) == 4 {
+		// the user is not exits
+		users := append(users, userFormatedWithTag)
+		newTitle := strings.Join(users, "") + getHasOrHave(len(users)) + " approved"
+		attachments[0].Fields = append(attachments[0].Fields, Field{"", newTitle, false})
+		attachments[0].Actions[0].Text = joinBtnText(len(users))
 
-	var usersSayYes []string
-	newAttachments := message.Payload.OriginalMessage.Attachments
-	var listUsersSay []string
+		// log.Println(newTitle, attachments[0].Fields)
+	} else if len(attachments[0].Fields) > 4 {
+		users = getAllUsersVoted(attachments[0].Fields[4].Value)
+		userChecked := make([]string, 0, len(users))
 
-	if userLength > 0 {
-		for _, u := range users {
-			listUsersSay = append(usersSayYes, userToTagString(u))
-		}
-		newAttachments[0].Actions[0].Text = strings.Join([]string{"Approved ", "(", strconv.Itoa(userLength), ")"}, "")
-
-		var hasOrHave = "has"
-		if userLength > 1 {
-			hasOrHave = "have"
-		}
-
-		if attLength > 1 {
-			textOfElement := strings.Split(newAttachments[1].Title, " ")
-			usersSubmitted := textOfElement[:len(textOfElement) - 2]
+		hasUser := contains(users, userFormatedWithTag)
 	
-			log.Println(usersSubmitted, "usersSubmitted")
-
-
-			newAttachments[1] = Attachment{
-				Title: strings.Join(listUsersSay, "") + hasOrHave + " approved",
-				Color: "good",
+		if hasUser {
+			for _, user := range users {
+					// check if the user is exist
+					if strings.TrimSpace(user) != strings.TrimSpace(userFormatedWithTag) {
+						userChecked = append(userChecked, user)
+					}
 			}
 		} else {
-			newAttachments = append(message.Payload.OriginalMessage.Attachments, Attachment{
-				Title: strings.Join(listUsersSay, "") + hasOrHave + " approved",
-				Color: "good",
-			})
+			userChecked = append(users, userFormatedWithTag)
+		}
+
+		// if the user is remove
+		if len(userChecked) < 1 {
+			attachments[0].Actions[0].Text = "Approved"
+			attachments[0].Fields = attachments[0].Fields[:len(attachments[0].Fields)-1]
+		} else {
+			newTitle := strings.Join(userChecked, "") + getHasOrHave(len(userChecked)) + " approved"
+			attachments[0].Fields[4].Value = newTitle
+			attachments[0].Actions[0].Text = joinBtnText(len(userChecked))
 		}
 	} else {
-		newAttachments[0].Actions[0].Text = "Approved"
+		attachments[0].Actions[0].Text = "Approved"
 	}
 
 	newMessage := Response{
 		Channel:     message.Payload.Channel.ID,
-		Attachments: newAttachments,
+		Attachments: attachments,
 		TS:          message.Payload.OriginalMessage.TS,
 	}
 
-	reqJSON, _ := json.Marshal(newMessage)
-	client := &http.Client{}
-	req, err := http.NewRequest("POST", "https://slack.com/api/chat.update", bytes.NewBuffer([]byte(reqJSON)))
-
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Authorization", "Bearer "+token)
-	resp, err := client.Do(req)
-
-	if err != nil {
-		fmt.Println(err, "Error")
-		http.Error(w, "error", http.StatusBadRequest)
-		return
-	}
-
-	ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-	// fmt.Printf(string(body))
+	replyToSlack(newMessage, w, "chat.update")
 }
 
 func userToTagString(u string) string {
-	return "<@" + u + "> "
+	return "<@" + u + ">"
 }
 
 func getAllUsersVoted(s string) []string {
-	return strings.Split(s, "")
+	users := strings.SplitAfter(s, ">")
+	return users[:len(users)-1]
+}
+
+func getHasOrHave(length int) string {
+	var hasOrHave = " has"
+	if length > 1 {
+		hasOrHave = " have"
+	}
+	return hasOrHave
+}
+
+func joinBtnText(length int) string {
+	return strings.Join([]string{"Approved ", "(", strconv.Itoa(length), ")"}, "")
 }
 
 func handleRequest() {
@@ -303,6 +287,16 @@ func handleRequest() {
 	http.HandleFunc("/ma", messageActionHandler)
 	log.Printf("Server is starting at %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
+}
+
+func contains(slice []string, item string) bool {
+	set := make(map[string]struct{}, len(slice))
+	for _, s := range slice {
+			set[s] = struct{}{}
+	}
+
+	_, ok := set[item] 
+	return ok
 }
 
 func initial() {
