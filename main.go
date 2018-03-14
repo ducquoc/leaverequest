@@ -127,24 +127,27 @@ func leaveRequestHandler(w http.ResponseWriter, r *http.Request) {
 	text := r.FormValue("text")
 	fmt.Println(text)
 
-	var name, date, reason, leaveType string
+	var name, date, reason, leaveType, linkURL string
 
 	if strings.Contains(text, "wf") {
 		contents := strings.Split(text, "\n")
 		submitter := contents[0]
 		leaveRequestType := contents[1]
 		duration := contents[2]
+		link := contents[3]
 		leaveRequestReason := contents[4]
 		name = strings.Split(submitter, ": ")[1]
 		leaveType = strings.Split(leaveRequestType, ":")[1]
 		date = strings.Split(duration, ": ")[1]
 		reason = strings.Split(leaveRequestReason, ": ")[2]
+		linkURL = strings.Split(link, ": ")[1]
 	} else {
-		contents := strings.Split(text, " ")
+		contents := strings.Split(text, "\"\"")
 		name = "<" + contents[0] + ">"
 		date = contents[1]
 		reason = contents[2]
 		leaveType = contents[3]
+		linkURL = contents[4]
 	}
 
 	fieds := []Field{
@@ -152,6 +155,7 @@ func leaveRequestHandler(w http.ResponseWriter, r *http.Request) {
 		{"Duration", date, true},
 		{"Additional information", reason, true},
 		{"Leave type", leaveType, true},
+		{"Link", linkURL, false},
 	}
 
 	actions := []Action{
@@ -214,7 +218,7 @@ func messageActionHandler(w http.ResponseWriter, r *http.Request) {
 	userFormatedWithTag := userToTagString(message.Payload.User.ID)
 
 	// log.Println(newFields, len(newFields))
-	if len(attachments[0].Fields) == 4 {
+	if len(attachments[0].Fields) == 5 {
 		// the user is not exits
 		users := append(users, userFormatedWithTag)
 		newTitle := strings.Join(users, "") + getHasOrHave(len(users)) + " approved"
@@ -222,8 +226,8 @@ func messageActionHandler(w http.ResponseWriter, r *http.Request) {
 		attachments[0].Actions[0].Text = joinBtnText(len(users))
 
 		// log.Println(newTitle, attachments[0].Fields)
-	} else if len(attachments[0].Fields) > 4 {
-		users = getAllUsersVoted(attachments[0].Fields[4].Value)
+	} else if len(attachments[0].Fields) > 5 {
+		users = getAllUsersVoted(attachments[0].Fields[5].Value)
 		userChecked := make([]string, 0, len(users))
 
 		hasUser := contains(users, userFormatedWithTag)
@@ -245,7 +249,7 @@ func messageActionHandler(w http.ResponseWriter, r *http.Request) {
 			attachments[0].Fields = attachments[0].Fields[:len(attachments[0].Fields)-1]
 		} else {
 			newTitle := strings.Join(userChecked, "") + getHasOrHave(len(userChecked)) + " approved"
-			attachments[0].Fields[4].Value = newTitle
+			attachments[0].Fields[5].Value = newTitle
 			attachments[0].Actions[0].Text = joinBtnText(len(userChecked))
 		}
 	} else {
